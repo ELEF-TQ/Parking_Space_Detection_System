@@ -1,51 +1,57 @@
-import os
+import cv2
 import pickle
-
-from skimage.io import imread
-from skimage.transform import resize
+import cvzone
 import numpy as np
-from sklearn.model_selection import train_test_split
-from sklearn.model_selection import GridSearchCV
-from sklearn.svm import SVC
-from sklearn.metrics import accuracy_score
+
+# Video feed
+cap = cv2.VideoCapture('carPark.mp4')
+
+with open('CarParkPos', 'rb') as f:
+    posList = pickle.load(f)
+
+width, height = 107, 48
 
 
-# prepare data
-input_dir = './data'
-categories = ['empty', 'not_empty']
+def checkParkingSpace(imgPro):
+    spaceCounter = 0
 
-data = []
-labels = []
-for category_idx, category in enumerate(categories):
-    for file in os.listdir(os.path.join(input_dir, category)):
-        img_path = os.path.join(input_dir, category, file)
-        img = imread(img_path)
-        img = resize(img, (15, 15))
-        data.append(img.flatten())
-        labels.append(category_idx)
+    for pos in posList:
+        x, y = pos
 
-data = np.asarray(data)
-labels = np.asarray(labels)
+        imgCrop = imgPro[y:y + height, x:x + width]
+        # cv2.imshow(str(x * y), imgCrop)
+        count = cv2.countNonZero(imgCrop)
 
-# train / test split
-x_train, x_test, y_train, y_test = train_test_split(data, labels, test_size=0.2, shuffle=True, stratify=labels)
 
-# train classifier
-classifier = SVC()
+        if count < 900:
+            color = (0, 255, 0)
+            thickness = 5
+            spaceCounter += 1
+        else:
+            color = (0, 0, 255)
+            thickness = 2
 
-parameters = [{'gamma': [0.01, 0.001, 0.0001], 'C': [1, 10, 100, 1000]}]
+        cv2.rectangle(img, pos, (pos[0] + width, pos[1] + height), color, thickness)
+        cvzone.putTextRect(img, str(count), (x, y + height - 3), scale=1,
+                           thickness=2, offset=0, colorR=color)
 
-grid_search = GridSearchCV(classifier, parameters)
+    cvzone.putTextRect(img, f'Free: {spaceCounter}/{len(posList)}', (100, 50), scale=3,
+                           thickness=5, offset=20, colorR=(0,200,0))
+while True:
 
-grid_search.fit(x_train, y_train)
+    if cap.get(cv2.CAP_PROP_POS_FRAMES) == cap.get(cv2.CAP_PROP_FRAME_COUNT):
+        cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+    success, img = cap.read()
+    imgGray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    imgBlur = cv2.GaussianBlur(imgGray, (3, 3), 1)
+    imgThreshold = cv2.adaptiveThreshold(imgBlur, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+                                         cv2.THRESH_BINARY_INV, 25, 16)
+    imgMedian = cv2.medianBlur(imgThreshold, 5)
+    kernel = np.ones((3, 3), np.uint8)
+    imgDilate = cv2.dilate(imgMedian, kernel, iterations=1)
 
-# test performance
-best_estimator = grid_search.best_estimator_
-
-y_prediction = best_estimator.predict(x_test)
-
-score = accuracy_score(y_prediction, y_test)
-
-print('{}% of samples were correctly classified'.format(str(score * 100)))
-
-pickle.dump(best_estimator, open('./model.p', 'wb'))
+    checkParkingSpace(imgDilate)
+    cv2.imshow("Image", img)
+    # cv2.imshow("ImageBlur", imgBlur)
+    # cv2.imshow("ImageThres", imgMedian)
+    cv2.waitKey(10)
